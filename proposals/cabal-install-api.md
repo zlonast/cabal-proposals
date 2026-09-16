@@ -253,9 +253,19 @@ are concentrated in the 5 points above — candidates for the new major version'
 1. **Do nothing; backport freely.**
 2. **Physical `src`/`src-internal` split inside one package.**
 
-## Backwards Compatibility / Migration
-1. Explicit separation into `cabal-install` and `cabal-install-internal`.
-2. I will send pull requests with the changes to everyone.
+## Versioning and Backwards Compatibility
+
+### Release & Versioning Policy (PVP)
+`cabal-install-internal` versioned synchronously with `cabal` releases, just like `cabal-install-solver`
+
+For the public tier in `cabal-install`, we strictly adhere to standard PVP:
+* **Major bump (`A.B`)**: Only when there are breaking changes to the public `API.*` layer.
+* **Minor bump (`C`)**: Backward-compatible API extensions — e.g., when a new external tool/reverse dependency arrives and we add a new function or module to accommodate its use case.
+* **Patch bump (`D`)**: Bug fixes and backports for existing consumers without changing any exposed signatures.
+
+### Migration Strategy
+1. **Explicit separation**: Split into `cabal-install` (public API tier) and `cabal-install-internal`.
+2. **Reverse dependencies migration**: Pull requests with the migration patches will be submitted to maintainers of all active reverse dependencies.
 
 ## Interested parties
 Maintainers of all six reverse dependencies: Bodigrim (`cabal-add`, `hackage-revdeps`), kokobd (`cabal-hoogle`), mniip (`cabal-matrix`), tek (`hix`), HiromiIshii/deepflowinc (`guardian`) — plus the Cabal maintenance team.
@@ -267,7 +277,7 @@ Yes, I will implement this myself in time for the next release.
 ## Open Questions
 1. `API.Download` currently has no consumer
 2. Criteria for adding new modules to the public tier 
-3. Is cabal-install-internal published on Hackage? No
+3. Is cabal-install-internal published on Hackage? (Just like `cabal-install-solver`)
 
 ## References
 1. Can't backport #12289
