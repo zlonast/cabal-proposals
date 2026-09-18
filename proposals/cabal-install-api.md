@@ -256,12 +256,20 @@ are concentrated in the 5 points above — candidates for the new major version'
 ## Versioning and Backwards Compatibility
 
 ### Release & Versioning Policy (PVP)
-`cabal-install-internal` versioned synchronously with `cabal` releases, just like `cabal-install-solver`
 
 For the public tier in `cabal-install`, we strictly adhere to standard PVP:
 * **Major bump (`A.B`)**: Only when there are breaking changes to the public `API.*` layer.
 * **Minor bump (`C`)**: Backward-compatible API extensions — e.g., when a new external tool/reverse dependency arrives and we add a new function or module to accommodate its use case.
 * **Patch bump (`D`)**: Bug fixes and backports for existing consumers without changing any exposed signatures.
+
+`cabal-install-internal` follows the `ghc-internal` versioning scheme discussed in this thread:
+
+**`cabal-install X.Y.Z.W` → `cabal-install-internal X.(Y*100+Z).W`**
+
+* Every `cabal-install` release carries its own `cabal-install-internal` PVP major, so breaking internal changes are always PVP-legal — including those riding a bugfix backport (e.g. `cabal-install 3.20.1.0` ships `cabal-install-internal 3.2001.0`).
+* The mapping is monotonic and decodable in both directions (`A = X`, `Y = B div 100`, `Z = B mod 100`, `C = W`), with the same `Y, Z <= 99` assumption as `ghc-internal` (`9.14.1 -> 9.1401.0`).
+
+The condition `cabal-install-internal` >= 3.2001 && < 3.2002 signifies "internal shipped with `cabal-install` 3.20.1.x"
 
 ### Migration Strategy
 1. **Explicit separation**: Split into `cabal-install` (public API tier) and `cabal-install-internal`.
@@ -276,10 +284,10 @@ Yes, I will implement this myself in time for the next release.
 
 ## Open Questions
 1. `API.Download` currently has no consumer
-2. Criteria for adding new modules to the public tier 
-3. Is cabal-install-internal published on Hackage? (Just like `cabal-install-solver`)
+2. Criteria for adding new modules to the public tier
 
 ## References
-1. Can't backport #12289
-2. Split like `cabal-install-solver`
-
+* Discussion "[Usefulness of releasing `cabal-install` the library](https://github.com/haskell/cabal/issues/12326)" — the origin of this proposal.
+* [haskell/cabal#12289](https://github.com/haskell/cabal/pull/12289) — a PR that could not be backported because it breaks the `cabal-install` API.
+* The `cabal-install-solver` split (Cabal 3.10) — the precedent for splitting an internal package out of `cabal-install`.
+* [`ghc-internal`](https://hackage.haskell.org/package/ghc-internal) — the versioning scheme (`9.14.1 -> 9.1401.0`) adopted here for `cabal-install-internal`.
