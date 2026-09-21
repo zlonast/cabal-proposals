@@ -169,30 +169,30 @@ Distribution.Client.API.Config
 Distribution.Client.API.PackageIndex
 Distribution.Client.API.Project
 Distribution.Client.API.Build
-Distribution.Client.API.Download
 ```
 
 ### Diagram: Who Needs What
 
 ```
-API.Config  API.PackageIndex  API.Project  API.Build  API.Download
+API.Config  API.PackageIndex  API.Project  API.Build
 hackage-revdeps      ●
 cabal-matrix         ●              ●
 cabal-add            ●                             ●
-cabal-hoogle         ●              ●              ●            ●
+cabal-hoogle         ●              ●              ●
 -----------------------------------------------------------------------------------
 almost everyone      ●   ← common core; the rest — on an as-needed basis
 ```
 
 ### Mapping: What Each New Module Covers
 
-| New Module | Replaces | Consumer |
-|---|---|---|
-| `API.Config` | `Config`, `GlobalFlags` (+removes `Sandbox`) | hackage-revdeps; cabal-matrix |
-| `API.PackageIndex` | `IndexUtils`, `Types.SourcePackageDb` | cabal-matrix |
-| `API.Project` | `ProjectConfig`, `DistDirLayout`, `RebuildMonad`, `HttpUtils` | cabal-add |
-| `API.Build` | `ProjectOrchestration`, `ProjectPlanning(.Types)`, `InstallPlan`, `ScriptUtils`, `TargetProblem`, `CmdBuild`, `CmdErrorMessages`, `NixStyleOptions`, `Setup` | cabal-hoogle |
-| `API.Download` | `HttpUtils` | reserved (no current consumer: `configureTransport` moved inside `projectLocalCabalFiles`) |
+| New Module | Consumer |
+|---|---|
+| `API.Config`: `GlobalConfig`, `loadGlobalConfig` | hackage-revdeps, cabal-matrix |
+| `API.Config`: `globalCacheDir` | hackage-revdeps |
+| `API.Config`: `globalSavedConfig` | — (internal, нужен `withPackageIndex`) |
+| `API.PackageIndex`: `PackageIndex`, `withPackageIndex`, `lookupPackageName` | cabal-matrix |
+| `API.Project`: `projectLocalCabalFiles` | cabal-add |
+| `API.Build`: `BuildOptions` (+7 fields), `defaultBuildOptions`, `runBuild`, `BuildTarget`, `buildTargetDistDir`, `buildTargetsAndDirs` | cabal-hoogle |
 
 ### Design Principles
 
@@ -205,36 +205,94 @@ I’ve downloaded the packages and created the patches. I’ll upload them once 
 
 ### Replacing internal imports with the API
 
-| Package | Previous (cabal-install modules) | New |
-|---|---|---|
-| hackage-revdeps | `Config`, `GlobalFlags` | `API.Config` (1 import) |
-| cabal-matrix | `Config`, `GlobalFlags`, `IndexUtils`, `Sandbox`, `Types.SourcePackageDb` + `Solver.Types.PackageIndex` | `API.Config` + `API.PackageIndex`; dependency on `cabal-install-solver` removed entirely |
-| cabal-add | `DistDirLayout`, `HttpUtils`, `ProjectConfig` (+`ProjectFileParser`), `RebuildMonad` | `API.Project.projectLocalCabalFiles` (1 call instead of 6 imports); custom parsing library left untouched |
-| cabal-hoogle | `CmdBuild`, `CmdErrorMessages`, `DistDirLayout`, `InstallPlan`, `NixStyleOptions`, `ProjectOrchestration`, `ProjectPlanning(.Types)`, `ScriptUtils`, `Setup`, `TargetProblem`, `Types.SourcePackageDb` | `API.Build` (`buildTargetsAndDirs` + `runBuild` + `BuildOptions`); reading `LocalBuildInfo` via the public Cabal API |
+```diff
++++ b/cabal-install/src/Distribution/Client/API/Build.hs
+@@ -0,0 +1,203 @@
++-- | Tier-0 stable API: building project targets.
++--
++-- Thin wrapper over the internal @Distribution.Client.CmdBuild@ and the
++-- orchestration layer (@Distribution.Client.ProjectOrchestration@,
++-- @Distribution.Client.ScriptUtils@).
++--
++-- This is the stable replacement for third-party tools that used to import
++-- the orchestration layer and @buildAction@ directly (see cabal-hoogle).
++module Distribution.Client.API.Build
++  ( BuildOptions -- Note: cabal-hoogle
++  , buildOptBuildDir -- Note: cabal-hoogle
++  , buildOptNoOptimisation -- Note: cabal-hoogle
++  , buildOptDocumentation -- Note: cabal-hoogle
++  , buildOptHaddockHoogle -- Note: cabal-hoogle
++  , buildOptHaddockHtml -- Note: cabal-hoogle
++  , buildOptHaddockLinkedSource -- Note: cabal-hoogle
++  , buildOptHaddockQuickJump -- Note: cabal-hoogle
++  , defaultBuildOptions -- Note: cabal-hoogle
++  , runBuild -- Note: cabal-hoogle
++  , BuildTarget -- Note: cabal-hoogle
++  , buildTargetDistDir -- Note: cabal-hoogle
++  , buildTargetsAndDirs -- Note: cabal-hoogle
++  ) where
++ ...
++++ b/cabal-install/src/Distribution/Client/API/Config.hs
+@@ -0,0 +1,35 @@
++-- | Tier-0 stable API: the user-level cabal configuration.
++--
++-- Thin wrapper over the internal @Distribution.Client.Config@ and
++-- @Distribution.Client.GlobalFlags@. Third-party tools must import only
++-- this module, not the underlying ones.
++module Distribution.Client.API.Config
++  ( GlobalConfig -- Note: hackage-revdeps, cabal-matrix
++  , globalCacheDir -- Note: hackage-revdeps
++  , globalSavedConfig -- Note: cabal-install
++  , loadGlobalConfig -- Note: hackage-revdeps, cabal-matrix
++  ) where
++ ...
++++ b/cabal-install/src/Distribution/Client/API/PackageIndex.hs
+@@ -0,0 +1,39 @@
++-- | Tier-0 stable API: reading the local Hackage package index.
++--
++-- Thin wrapper over the internal @Distribution.Client.IndexUtils@ and
++-- @Distribution.Client.Types.SourcePackageDb@.
++module Distribution.Client.API.PackageIndex
++  ( PackageIndex -- Note: cabal-matrix
++  , withPackageIndex -- Note: cabal-matrix
++  , lookupPackageName -- Note: cabal-matrix
++  ) where
++ ...
++++ b/cabal-install/src/Distribution/Client/API/Project.hs
+@@ -0,0 +1,61 @@
++-- | Tier-0 stable API: loading a cabal project.
++--
++-- Thin wrapper over the internal @Distribution.Client.ProjectConfig@,
++-- @Distribution.Client.DistDirLayout@ and @Distribution.Client.RebuildMonad@.
++module Distribution.Client.API.Project
++  ( projectLocalCabalFiles -- Note: cabal-add
++  ) where
++ ...
+```
 
-To achieve this, the `API.*` modules were extended based on actual requirements (`Project.projectLocalCabalFiles`,
-`Build.{BuildOptions, runBuild, buildTargetsAndDirs, BuildTarget}`); the resulting size of the new
-public layer is 5 modules, totaling **462 lines**.
+To achieve this, the `API.{Config, PackageIndex, Project, Build}` modules were extended based on actual requirements
+(`Project.projectLocalCabalFiles`, `Build.{BuildOptions, runBuild, buildTargetsAndDirs, BuildTarget}`);
+the resulting size of the new public layer is 4 modules, totaling **338 lines**.
 
 ### Scope of changes by package
 
-| Package | Files | +Lines | −Lines | Note |
-|---|---:|---:|---:|---|
-| hackage-revdeps | 3 | +12 | −16 | + new `cabal.project` (11 lines) |
-| cabal-matrix | 2 | +15 | −20 | |
-| cabal-add | 2 | +6 | −61 | `app/Main.hs`: −58 lines — all discovery machinery moved to the API |
-| cabal-hoogle | 5 | +59 | −205 | `Common.hs` −146: `buildAction` fork no longer needed |
-| **Total** | **12** | **+92** | **−302** | migration **reduced** consumer code by ~210 lines |
+| Package | Files | +Lines | −Lines |
+|---|---:|---:|---:|
+| hackage-revdeps | 4	| +21 |	−16 |
+| cabal-matrix | 2 | +15 | −20 |
+| cabal-add | 2 | +6 | −62 |
+| cabal-hoogle | 5 | +59 | −205 |
+| **Total** | **13** | **+101** | **−303** |
 
 ### Independent breaking changes in Cabal/cabal-install 3.19 (discovered during migration)
 
-| # | Change | Affected packages | Solution |
-|---|---|---|---|
-| 1 | `Distribution.Verbosity`: `silent`/`normal` became `VerbosityFlags`; full `Verbosity` is constructed via `mkVerbosity defaultVerbosityHandles <flags>` | hackage-revdeps, cabal-matrix, cabal-hoogle | local `defaultVerbosity`/`silentVerbosity` wrapper |
-| 2 | `Distribution.Make` module removed from Cabal (`Make` build-type no longer supported) | cabal-hoogle (`act-as-setup`) | `Make` branch → explicit "no longer supported" error |
-| 3 | `resolveTargets'` → `resolveTargetsFromSolver`; `reportTargetProblems` moved to private `reportBuildTargetProblems` | cabal-hoogle (3.16 code) | handled by `API.Build.buildTargetsAndDirs` |
-| 4 | Signatures for `readProjectConfig`/`findProjectPackages`/`ProjectFileParser` changed between 3.16 and 3.19 (cabal-add used CPP branches) | cabal-add | CPP removed — superseded by `API.Project.projectLocalCabalFiles` |
-| 5 | Sandbox-era API (`loadConfigOrSandboxConfig`) — not part of the public layer | cabal-matrix | `API.Config.loadGlobalConfig` + `API.PackageIndex.withPackageIndex` |
+| # | Change | Affected packages |
+|---|---|---|
+| 1 | `Distribution.Verbosity` | hackage-revdeps, cabal-matrix, cabal-hoogle |
+| 2 | `Distribution.Make` | cabal-hoogle (`act-as-setup`) |
+| 3 | `resolveTargets'` → `resolveTargetsFromSolver`; `reportTargetProblems` → private `reportBuildTargetProblems` | cabal-hoogle |
+| 4 | Signatures for `readProjectConfig`/`findProjectPackages`/`ProjectFileParser` | cabal-add |
+| 5 | `loadConfigOrSandboxConfig` — not part of the public layer | cabal-matrix |
 
 Conclusion: the public `API.*` layer covers all four active consumers; migration simply
 involves replacing imports and, on average, **reduces** their code size. All independent breaking changes in 3.19
