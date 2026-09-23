@@ -23,11 +23,13 @@ I would like to present my research on this topic to the Cabal developers and th
     - [Infrastructure](#infrastructure)
     - [Legacy](#legacy)
 - [Proposed Change](#proposed-change)
-  - [Target design: a new public API over a private implementation](#target-design-a-new-public-api-over-a-private-implementation)
+  - [Target design: two packages, one command namespace](#target-design-two-packages-one-command-namespace)
   - [New public modules](#new-public-modules)
   - [Diagram: Who Needs What](#diagram-who-needs-what)
   - [Design Principles](#design-principles)
   - [API admission process](#api-admission-process)
+  - [Dogfooding: migrating the built-in commands](#dogfooding-migrating-the-built-in-commands)
+  - [The graduation ladder](#the-graduation-ladder)
 - [Migrating reverse dependencies to the new API](#migrating-reverse-dependencies-to-the-new-api)
   - [Replacing internal imports with the API](#replacing-internal-imports-with-the-api)
   - [Scope of changes by package](#scope-of-changes-by-package)
@@ -51,8 +53,11 @@ I would like to present my research on this topic to the Cabal developers and th
 ## Summary
 Split the ~140 exported modules of `cabal-install` into a small, stability-guaranteed public API and an internal implementation:
 
-* `cabal-install` exposes **4 new modules** — `Distribution.Client.API.{Config,PackageIndex,Project,Build}`
-* everything else (147 modules) moves to a new internal package `cabal-install-internal`
+* `cabal-install` exposes **4 new modules** — `Distribution.Client.API.{Config,PackageIndex,Project,Build}`; the set grows as needs are admitted
+* the built-in commands keep their file identity as `Distribution.Client.API.Command.{Build,Sdist,Outdated,…}` in `cabal-install`, rewritten on top of the API — cabal's own CLI becomes the API's first consumer
+* everything else — the engine and the command parts nobody external imports — moves to `cabal-install-internal`
+
+Dependency chain: `cabal-install` → `cabal-install-internal`. The layering `API.Command.* → API.* → internal` is enforced by a CI import-lint.
 
 The design was validated by migrating all four live reverse dependencies onto the new API: all of them build against it, and the migration *reduced* their code by ~210 lines in total.
 
@@ -212,13 +217,21 @@ Note that in the final design these 19 modules are not published as-is: they det
 
 ## Proposed Change
 
-### Target design: a new public API over a private implementation
+### Target design: two packages, one command namespace
 
-Breaking changes can only be rolled out in a new major version of Cabal, so the
-target architecture is as follows: **several new wrapper modules become public**,
-while all 147 existing modules move into a separate internal package,
-`cabal-install-internal`, accessed directly by `exe:cabal`
-(precedent: the `cabal-install-solver` split in Cabal 3.10).
+Breaking changes can only be rolled out in a new major version of Cabal, so the target architecture is two packages
+
+```
+cabal-install-internal     the engine (planning, orchestration, config, solver glue)
+        ↑
+cabal-install              exposed: Distribution.Client.API.* (stable primitives) and Distribution.Client.API.Command.*
+```
+
+* **No third package**: nothing outside `exe:cabal` needs the commands as a separate library, so they live in `cabal-install` under the `API.Command.*` namespace, importable alongside the primitives.
+* **Placement rule**: a shared part of the commands goes to `cabal-install-internal`, unless an external tool imports it — then it graduates into `API.*` (the admission process below).
+* **The `API.Command.*`** modules may only import `API.*` and `Cabal-syntax`, never the engine directly.
+* **Dogfooding**: every built-in command is a live consumer of the API, exercised by every CI run — the tier cannot rot.
+* **`exe:cabal` stays in `cabal-install`**: the Hackage package keeps shipping the `cabal` binary, so bootstrap and ghcup flows are unaffected.
 
 ### New public modules
 
@@ -227,7 +240,10 @@ Distribution.Client.API.Config
 Distribution.Client.API.PackageIndex
 Distribution.Client.API.Project
 Distribution.Client.API.Build
+Distribution.Client.API.Command.{Build,Sdist,Outdated,…}   -- the built-in commands
 ```
+
+The four primitives are the starting tier (338 lines), validated against the four external consumers; the `API.Command.*` modules are the migrated commands. Both grow organically: shared needs graduate into new `API.*` primitives through the same admission process, and parts of commands that external tools import follow the same route.
 
 ### Diagram: Who Needs What
 
@@ -286,6 +302,25 @@ Add any other relevant context here.
 **Step 2 — review and design.** The Cabal team reviews the use case: is it general enough to freeze as a public contract, or a one-off that should stay internal? Accepted additions follow the same design principles as the original tier (thin wrappers, custom types, no leaking internals) and come with tests and a ChangeLog entry.
 
 **Step 3 — land and migrate.** The additions ship in the next minor release (`C` bump, see the versioning policy below). The team then submits — a migration PR against the requesting tool; once merged, the tool drops its `cabal-install-internal` dependency and falls under the stability guarantee: from that point on, admitted definitions can only change in a major version of `cabal-install`.
+
+### Dogfooding: migrating the built-in commands
+
+Cabal's own CLI is the proof that the API tier is sufficient: it runs entirely on the API. Each command migration is the same refactoring: the command keeps its identity as `API.Command.<Name>`, the engine logic sinks into `cabal-install-internal`, and shared parts go with it — unless an external tool imports them, in which case they graduate into `API.*`. Planned waves, cheapest first:
+
+1. `CmdClean`, `CmdPath`, `CmdUserConfig`, `CmdOutdated`, `CmdGenBounds`, `CmdSdist` — the config/index/project layer, already covered by `API.{Config,PackageIndex,Project}`;
+2. `CmdListBin`, `CmdTarget`, `CmdFreeze` — read-only access to the install plan (freeze also needs a solver-facing module);
+3. `CmdBuild` (`API.Build` already exists), then `CmdHaddock`, `CmdTest`/`CmdBench`, `CmdRun`/`CmdRepl`, `CmdInstall`, `CmdUpdate`/`CmdUpload` — the orchestration-heavy commands.
+
+External tools follow the same path — see the graduation ladder below.
+
+### The graduation ladder
+
+The package chain gives every utility — external or built-in — a visible path:
+
+1. **Pin the internal** — build against `cabal-install-internal` with exact bounds (Step 0 above);
+2. **Consume the API** — import the `API.*` primitives and `API.Command.*` commands from `cabal-install`, or request admission of your use case (Steps 1–3 above);
+3. **Merge into the monorepo** — if a utility is simple and useful, it can be merged into the cabal repository (BSD/MIT license, maintainer agreement); it then operates exactly the way `API.Command.CmdSdist`, `CmdOutdated`, `CmdListBin` and friends do;
+4. **Become a built-in subcommand** — functionality the CLI itself wants lands as `API.Command.*`, the historical route of `cabal sdist`, `cabal user-config diff`, `cabal list-bin`, `cabal outdated`.
 
 ## Migrating reverse dependencies to the new API
 
@@ -448,13 +483,18 @@ For the public tier in `cabal-install`, we strictly adhere to standard PVP:
 
 The condition `cabal-install-internal` >= 3.2001 && < 3.2002 signifies "internal shipped with `cabal-install` 3.20.1.x"
 
+Everything exposed by `cabal-install` falls under the same strict PVP: both the `API.*`
+primitives and the `API.Command.*` modules. In practice the primitives rarely change, while
+reorganizing the commands forces a major — accepted noise, since majors are allowed at any time;
+the primitives' stability is unaffected.
+
 ### Integration with the existing release process
 
 No new release strategy is needed: `cabal-install-internal` joins the existing [release checklist](https://github.com/haskell/cabal/wiki/Making-a-release) exactly the way `cabal-install-solver` did in Cabal 3.10. The additions to the checklist are mechanical:
 
-* **Version bumps (C.3):** add `cabal-install-internal/cabal-install-internal.cabal` to the list of `version` fields. Its version is *derived*, not decided — `cabal-install X.Y.Z.W` maps to `cabal-install-internal X.(Y*100+Z).W` — so the release manager applies a one-line transformation instead of holding a versioning discussion.
+* **Version bumps (C.3):** add `cabal-install-internal/cabal-install-internal.cabal` to the list of `version` fields. The internal version is *derived*, not decided — `cabal-install X.Y.Z.W` maps to `cabal-install-internal X.(Y*100+Z).W` — so the release manager applies a one-line transformation instead of holding a versioning discussion.
 * **Changelogs (C.2):** a `changelog.d/` directory for `cabal-install-internal`. Unlike the solver, internal entries are *not* duplicated into the `cabal-install` changelog: duplication is reserved for changes to the public `API.*` tier, which are the contract and must be recorded in `cabal-install`'s changelog.
-* **Tags and Hackage uploads (C.4, C.5):** add the `cabal-install-internal-v…` tag and the package to the upload list, as with `cabal-install-solver`.
+* **Tags and Hackage uploads (C.4, C.5):** add the `cabal-install-internal-v…` tag and the package to the upload list, as with `cabal-install-solver`, and refresh the bootstrap plans.
 * **Backport check (section A):** the checklist rule "The API exposed by the libraries must not change in a breaking way for current consumers" becomes mechanically checkable for cabal-install: a backport is valid iff it does not modify `Distribution.Client.API.*` — enforceable in CI with a trivial path filter.
 
 #### Consumer delivery policy
