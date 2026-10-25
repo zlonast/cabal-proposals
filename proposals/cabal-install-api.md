@@ -8,20 +8,13 @@ I would like to present my research on this topic to the Cabal developers and th
 - [Motivation](#motivation)
   - [Backports become a mechanical decision](#backports-become-a-mechanical-decision)
   - [API consumers get releases in days, not months](#api-consumers-get-releases-in-days-not-months)
-  - [Supporting every consumer is now affordable — and automatable](#supporting-every-consumer-is-now-affordable--and-automatable)
+  - [Supporting every consumer is now affordable and automatable](#supporting-every-consumer-is-now-affordable-and-automatable)
 - [Current situation](#current-situation)
   - [Hackage package status](#hackage-package-status)
   - [Usage depth summary](#usage-depth-summary)
   - [Seed table: closure and consumers](#seed-table-closure-and-consumers)
-- [Separating active and abandoned packages](#separating-active-and-abandoned-packages)
-  - [Sensitivity of the closure to the set of rdeps](#sensitivity-of-the-closure-to-the-set-of-rdeps)
   - [Stable API core: 19 modules](#stable-api-core-19-modules)
-    - [User configuration (base layer)](#user-configuration-base-layer)
-    - [Package index](#package-index)
-    - [Project and Layout](#project-and-layout)
-    - [Build Orchestration (10 modules — the "blob" core)](#build-orchestration-10-modules--the-blob-core)
-    - [Infrastructure](#infrastructure)
-    - [Legacy](#legacy)
+
 - [Proposed Change](#proposed-change)
   - [Target design: two packages, two stability tiers](#target-design-two-packages-two-stability-tiers)
   - [New public modules](#new-public-modules)
@@ -33,7 +26,6 @@ I would like to present my research on this topic to the Cabal developers and th
 - [Migrating reverse dependencies to the new API](#migrating-reverse-dependencies-to-the-new-api)
   - [Replacing internal imports with the API](#replacing-internal-imports-with-the-api)
   - [Scope of changes by package](#scope-of-changes-by-package)
-  - [Independent breaking changes in Cabal/cabal-install 3.19 (discovered during migration)](#independent-breaking-changes-in-cabalcabal-install-319-discovered-during-migration-and-the-master-rebase)
 - [Alternatives Considered](#alternatives-considered)
   - [1. Backport freely, accept API breakage](#1-backport-freely-accept-api-breakage)
   - [2. Freeze the API, stop backporting](#2-freeze-the-api-stop-backporting)
@@ -41,9 +33,9 @@ I would like to present my research on this topic to the Cabal developers and th
   - [4. Extract exactly the used functions and types](#4-extract-exactly-the-used-functions-and-types)
   - [Comparison](#comparison)
 - [Versioning and Backwards Compatibility](#versioning-and-backwards-compatibility)
-  - [Release & Versioning Policy (PVP)](#release--versioning-policy-pvp)
+  - [Release and Versioning Policy (PVP)](#release-and-versioning-policy-pvp)
   - [Integration with the existing release process](#integration-with-the-existing-release-process)
-    - [Consumer delivery policy](#consumer-delivery-policy)
+  - [Consumer delivery policy](#consumer-delivery-policy)
   - [Migration Strategy](#migration-strategy)
 - [Interested parties](#interested-parties)
 - [Implementation Notes](#implementation-notes)
@@ -54,7 +46,7 @@ I would like to present my research on this topic to the Cabal developers and th
 Split the ~140 exported modules of `cabal-install` into a small, stability-guaranteed public API and an internal implementation:
 
 * `cabal-install` exposes the **public API tier `Distribution.Client.API.*`** in two stability sub-tiers:
-  * **tier 0 — the tooling API**: `Config`, `PackageIndex`, `Project`, `Build` (~330 lines), thin wrappers with API-owned types
+  * **tier 0 — the tooling API**: `Config`, `PackageIndex`, `Project`, `Build` (329 lines), thin wrappers with API-owned types
   * **tier 1 — the command facades**: `API.Command.{Build,Sdist,Outdated,…}` (19 modules) — pure re-exports of the built-in commands' entry points, the frozen "programmatic cabal" contract, declared stable immediately, additive-only
 
 Dependency chain: `cabal-install` → `cabal-install-internal`. The tier is enforced by a CI import-lint: every module of `cabal-install`'s library must live under `Distribution.Client.API.*`, and a facade must not define anything of its own.
@@ -70,7 +62,7 @@ The informal API boundary does not exist today, so every backport to a release b
 
 With safety no longer in question, nothing prevents cutting a release as soon as a fix lands: a `cabal-install` patch or minor release can be published within days of the fix, with consumers' bounds untouched because the public tier is.
 
-### Supporting every consumer is now affordable — and automatable
+### Supporting every consumer is now affordable and automatable
 
 We could even deliver migration patches to every registered consumer, turning a break in API backward compatibility from a community crisis into a routine, same-day task. It is precisely the limited number of consumers that makes such a support model realistic at this stage; for the same reason, formalizing the API is inexpensive *now* but will become increasingly costly as the user base grows.
 
@@ -140,72 +132,12 @@ The current situation is such that we don't know when we can release a backport;
 | `Types.Repo` | 5 | 0 | hix |
 | `Upload` | 56 | 2 | hix |
 
-## Separating active and abandoned packages
-
-### Sensitivity of the closure to the set of rdeps
-
-`guardian` (dead, no release for 2.5 years) does not track recent releases — recalculating without the abandoned consumers reveals the "cost" of supporting them in the public API:
-
-| Set | Seeds | Public tier | Internal |
-|---|---:|---:|---:|
-| all 6 rdeps | 32 | 101 | 46 |
-| the four active consumers | 19 | **97** | **50** |
-| + excluding `cabal-hoogle` | 9 | **78** | **69** |
-
 ### Stable API core: 19 modules
 
-Changes can only be rolled out in a new major version of `cabal`, so it makes sense to start defining the stable API based on direct imports from the four active rdeps—this amounts to exactly **19 modules**, grouped below. The "seed" modules here are the primary candidates for the public tier; the ~97 closure modules depending on them are secondary and can gradually be moved to `internal`.
+The stable API starts from the direct imports of the four active rdeps — exactly **19 modules**:
+`Distribution.Client.Config`, `Distribution.Client.GlobalFlags`, `Distribution.Client.IndexUtils`, `Distribution.Client.Types.SourcePackageDb`, `Distribution.Client.ProjectConfig`, `Distribution.Client.DistDirLayout`, `Distribution.Client.NixStyleOptions`, `Distribution.Client.Setup`, `Distribution.Client.ProjectOrchestration`, `Distribution.Client.ProjectPlanning`, `Distribution.Client.ProjectPlanning.Types`, `Distribution.Client.InstallPlan`, `Distribution.Client.ScriptUtils`, `Distribution.Client.TargetProblem`, `Distribution.Client.CmdBuild`, `Distribution.Client.CmdErrorMessages`, `Distribution.Client.HttpUtils`, `Distribution.Client.RebuildMonad`, `Distribution.Client.Sandbox`.
 
-Note that in the final design these 19 modules are not published as-is: they determine the surface of the new wrapper modules and become private dependencies of cabal-install-internal
-
-#### User configuration (base layer)
-
-| Module | Contents | Users |
-|---|---|---|
-| `Distribution.Client.Config` | `SavedConfig`, `loadConfig` — loading/saving `~/.cabal/config` (remote-repo, jobs, proxy…); entry point for almost any tool | cabal-matrix, hackage-revdeps |
-| `Distribution.Client.GlobalFlags` | `GlobalFlags(..)`, `globalCacheDir` — global cache/log paths, CLI-wide flags | cabal-matrix, hackage-revdeps |
-
-#### Package index
-
-| Module | Contents | Users |
-|---|---|---|
-| `Distribution.Client.IndexUtils` | `getSourcePackages`, `getInstalledPackages` — reading the local Hackage index (`01-index.tar`), timestamps, active repos | cabal-matrix |
-| `Distribution.Client.Types.SourcePackageDb` | `SourcePackageDb(..)`, `lookupPackageName` — database of all source packages from the index | cabal-hoogle, cabal-matrix |
-
-#### Project and Layout
-
-| Module | Contents | Users |
-|---|---|---|
-| `Distribution.Client.ProjectConfig` | `ProjectConfig(..)`, `ProjectRoot(..)`, parsing `cabal.project` (cabal-add also uses `ProjectFileParser`) | cabal-add |
-| `Distribution.Client.DistDirLayout` | `DistDirLayout(..)`, `distBuildDirectory` — `dist-newstyle` layout, build artifact paths | cabal-add, cabal-hoogle |
-
-#### Build Orchestration (10 modules — the "blob" core)
-
-| Module | Contents | Users |
-|---|---|---|
-| `Distribution.Client.NixStyleOptions` | `NixStyleFlags(..)`, `defaultNixStyleFlags` — common set of flags for nix-style commands (config+install+project flags) | cabal-hoogle |
-| `Distribution.Client.Setup` | Command flag parsers/types: `InstallFlags`, `configCompilerAux'`, `withRepoContext`, `IsCandidate` | cabal-hoogle |
-| `Distribution.Client.ProjectOrchestration` | Command phases: discovery → planning → build; `establishProjectBaseContext(WithRoot)`, `withInstallPlan`, `CurrentCommand` | cabal-hoogle |
-| `Distribution.Client.ProjectPlanning` | Constructing the elaborated install plan: `ElaboratedInstallPlan`, `ElaboratedConfiguredPackage` | cabal-hoogle |
-| `Distribution.Client.ProjectPlanning.Types` | Plan types: `elabDistDirParams`, unit IDs, component settings | cabal-hoogle |
-| `Distribution.Client.InstallPlan` | Installation graph: `GenericPlanPackage`, `depends`, topological traversals | cabal-hoogle |
-| `Distribution.Client.ScriptUtils` | Helpers for project target commands: `withContextAndSelectors`, script-mode handling | cabal-hoogle |
-| `Distribution.Client.TargetProblem` | `TargetProblem(..)` — target selection error type + rendering | cabal-hoogle |
-| `Distribution.Client.CmdBuild` | `cabal build` implementation: `buildAction`, `BuildFlags`, target selectors | cabal-hoogle |
-| `Distribution.Client.CmdErrorMessages` | Error rendering: `reportTargetProblems`, `renderCannotPruneDependencies` | cabal-hoogle |
-
-#### Infrastructure
-
-| Module | Contents | Users |
-|---|---|---|
-| `Distribution.Client.HttpUtils` | `DownloadResult`, `configureTransport` — HTTP transport selection (HTTP/hackage-security), proxies | cabal-add |
-| `Distribution.Client.RebuildMonad` | `Rebuild` monad, `runRebuild` — file change tracking, basis for file monitors | cabal-add |
-
-#### Legacy
-
-| Module | Contents | Users |
-|---|---|---|
-| `Distribution.Client.Sandbox` | `loadConfigOrSandboxConfig` — compatibility with old sandboxes, built on top of `loadConfig` | cabal-matrix |
+These are not published as-is: they determine the surface of the new wrapper modules and become private dependencies of `cabal-install-internal` (their ~97-module transitive closure follows gradually).
 
 ## Proposed Change
 
@@ -248,15 +180,16 @@ New Module       API.Config  API.PackageIndex  API.Project    API.Build
 hackage-revdeps      ●
 cabal-matrix         ●              ●
 cabal-add            ●                             ●
-cabal-hoogle         ●              ●              ●              ●
+cabal-hoogle                                                      ●
 
 tier 1 — the facades and their dictionary:
 New Module       API.Flags   API.Command.CmdSdist  API.Command.CmdUpdate
 hix                  ●                ●                     ●
 cabal-buck2          ●
+guardian             ●                                      ●
 ```
 
-Tier 1 serves the "programmatic cabal" audience. Both its consumers are ported in **mixed mode**: hix takes the sdist/update facades plus the flag dictionary and keeps its solver-facing surface on `cabal-install-internal ==3.19.*`; cabal-buck2 takes `NixStyleFlags` the same way — and is the strongest Step-0 data point, since its released form already pins `cabal-install ==3.18.1.0`. Everything else they read from the plan is engine territory and stays internal; no API extension was needed.
+Tier 1 serves the "programmatic cabal" audience. All three of its consumers are ported in **mixed mode**: hix takes the sdist/update facades plus the flag dictionary. `cabal-buck2` — takes `NixStyleFlags` the same way. And `guardian`, takes `updateAction` via `API.Command.CmdUpdate` plus `API.Flags`, with its orchestration/plan surface exact-pinned to `cabal-install-internal`.
 
 ### Design Principles
 
@@ -309,11 +242,13 @@ Add any other relevant context here.
 ```
 **Step 2 — review and design.** The Cabal team reviews the use case: is it general enough to freeze as a public contract, or a one-off that should stay internal? Accepted additions follow the same design principles as the original tier (thin wrappers, custom types, no leaking internals) and come with tests and a ChangeLog entry.
 
-**Step 3 — land and migrate.** The additions ship in the next minor release (`C` bump, see the versioning policy below). The team then submits — a migration PR against the requesting tool; once merged, the tool drops its `cabal-install-internal` dependency and falls under the stability guarantee: from that point on, admitted definitions can only change in a major version of `cabal-install`.
+**Step 3 — land and migrate.** The additions ship in the next minor release (`C` bump, see the versioning policy below). The team then submits a migration PR against the requesting tool.
 
 ### Commands are residents, not consumers
 
 **Tracking**: the lint (the `api-lint` step of `cabal-validate`; locally `./validate.sh -s api-lint`, and by default in every `validate.sh` run) checks the two structural invariants: every module of `cabal-install`'s library lives under `Distribution.Client.API.*` (the exposed surface is exactly the tier — nothing can accrete outside it), and every facade defines nothing of its own (its export list is the contract, sourced from the engine).
+
+**Why tier-1 is frozen wholesale.** Freezing is precisely the selection of what will not change. 
 
 ### The graduation ladder
 
@@ -388,8 +323,8 @@ module Distribution.Client.API.Project
 module Distribution.Client.API.Flags
   ( GlobalFlags (..) -- Note: cabal-install (API.Command.*), hix
   , defaultGlobalFlags -- Note: cabal-install (API.Command.*), hix
-  , NixStyleFlags (..) -- Note: cabal-install (API.Command.*), hix, cabal-buck2
-  , defaultNixStyleFlags -- Note: cabal-install (API.Command.*), hix, cabal-buck2
+  , NixStyleFlags (..) -- Note: cabal-install (API.Command.*), hix, cabal-buck2, guardian
+  , defaultNixStyleFlags -- Note: cabal-install (API.Command.*), hix, cabal-buck2, guardian
   , ProjectFlags (..) -- Note: cabal-install (API.Command.CmdClean, CmdSdist), hix
   , defaultProjectFlags -- Note: cabal-install (API.Command.CmdClean, CmdSdist)
   , ReplFlags (..) -- Note: cabal-install (API.Command.CmdRepl)
@@ -414,7 +349,7 @@ module Distribution.Client.API.Command.CmdSdist
 -- | Tier-1 stable API: the @cabal update@ command facade.
 module Distribution.Client.API.Command.CmdUpdate
   ( updateCommand
-  , updateAction -- Note: hix
+  , updateAction -- Note: hix, guardian
   ) where
 ```
 
@@ -443,21 +378,10 @@ To achieve this, the `API.{Config, PackageIndex, Project, Build}` modules were e
 | cabal-hoogle | 5 | +59 | −205 |
 | hix | 14 | +54 | −52 |
 | cabal-buck2 | 4 | +25 | −28 |
-| **Total** | **31** | **+180** | **−383** |
+| guardian | 2 | +3 | −2 |
+| **Total** | **33** | **+183** | **−385** |
 
-### Independent breaking changes in Cabal/cabal-install 3.19 (discovered during migration and the master rebase)
-
-| # | Change | Affected packages |
-|---|---|---|
-| 1 | `Distribution.Verbosity` | hackage-revdeps, cabal-matrix, cabal-hoogle |
-| 2 | `Distribution.Make` | cabal-hoogle (`act-as-setup`) |
-| 3 | `resolveTargets'` → `resolveTargetsFromSolver`; `reportTargetProblems` → private `reportBuildTargetProblems` | cabal-hoogle |
-| 4 | Signatures for `readProjectConfig`/`findProjectPackages`/`ProjectFileParser` | cabal-add |
-| 5 | `loadConfigOrSandboxConfig` — not part of the public tier | cabal-matrix |
-| 6 | `BuildInfo` fields converted from `String` to `Text` | hix |
-| 7 | `SetupWrapper`: `InLibraryLBI` replaced with `Maybe LocalBuildInfo` | cabal-hoogle (`act-as-setup`) |
-
-Conclusion: the public `API.*` tier covers all four active consumers; migration simply involves replacing imports and, on average, **reduces** their code size. All independent breaking changes in 3.19 are concentrated in the 7 points above — candidates for the new major version's ChangeLog.
+The migration validates the design: the public `API.*` tier covers all four active consumers, and it is an import swap that, on average, **shrinks** the tools. The independent breaking changes of the 3.19 line discovered along the way are logged in the new major version's ChangeLog.
 
 ## Alternatives Considered
 
@@ -501,11 +425,11 @@ Keep the layout, but surgically extract the definitions reverse dependencies imp
 | 2. Freeze backports | no | yes | ~140 modules | — |
 | 3. Publish 19 modules as-is | yes | nominal — closures leak | ~97 modules | no |
 | 4. Extract used definitions | yes | yes, but ad hoc | small | no |
-| **Proposal** | **yes** | **yes** | **24 modules, 669 lines** | **yes — 4 rdeps migrated** |
+| **Proposal** | **yes** | **yes — PVP-level** | **24 modules, 670 lines** | **yes — all 6 rdeps migrated** |
 
 ## Versioning and Backwards Compatibility
 
-### Release & Versioning Policy (PVP)
+### Release and Versioning Policy (PVP)
 
 For the public tier in `cabal-install`, we strictly adhere to standard PVP:
 * **Major bump (`A.B`)**: Only when there are breaking changes to the public `API.*` tier.
@@ -515,10 +439,10 @@ For the public tier in `cabal-install`, we strictly adhere to standard PVP:
 ```mermaid
 flowchart LR
     C["a change"] --> Q{"touches the<br>public tier?"}
-    Q -->|no| D["patch: D"]
-    Q -->|yes| Q2{"how?"}
-    Q2 -->|"renamed, retyped or removed"| MAJ["major: A.B"]
-    Q2 -->|"new names, new fields"| MIN["minor: C"]
+    Q -->|no| D["patch: D<br>bug fixes and backports"]
+    Q -->|yes| Q2{"renamed, retyped<br>or removed?"}
+    Q2 -->|yes| MAJ["major: A.B"]
+    Q2 -->|no| MIN["minor: C<br>new names, new fields"]
 ```
 
 `cabal-install-internal` follows the `ghc-internal` versioning scheme discussed in this thread:
@@ -528,6 +452,18 @@ flowchart LR
 * Every `cabal-install` release series (`X.Y.Z`) carries its own `cabal-install-internal` PVP major (`X.(Y*100+Z)`), so breaking internal changes are always PVP-legal — including those riding a backport (e.g. `cabal-install 3.20.1.0` ships `cabal-install-internal 3.2001.0`). Breaking internal changes ride a `Z` bump of the tool; a `W` patch of the tool may only carry additive internal changes.
 * The mapping is monotonic and decodable for the release series (`A = X`, `Y = B div 100`, `Z = B mod 100`), with the same `Y, Z <= 99` assumption as `ghc-internal` (`9.14.1 -> 9.1401.0`).
 * The last component `C` is internal's own additive-patch counter, starting at `0` per tool release series. It is **not** a mirror of the tool's `W`: internal may release additive patches on its own (`3.1900.0 -> 3.1900.1`), and a later `W` patch of the tool with additive engine changes simply takes the next counter value. The exact tool patch release is identified by the changelog, not by `C`.
+
+A walk through one release series (`3.19`):
+
+```mermaid
+flowchart LR
+    T1["ci 3.19.0.0"] -->|"ships"| E1["cii 3.1900.0"]
+    E1 -->|"internal-only additive<br>hotfix: C + 1"| E2["cii 3.1900.1"]
+    T1 -->|"Z bump: backport,<br>breaking internal changes"| T2["ci 3.19.1.0"]
+    T2 -->|"ships"| E3["cii 3.1901.0"]
+    T2 -->|"W patch: additive<br>engine change: C + 1"| T3["ci 3.19.1.1"]
+    T3 -->|"ships"| E4["cii 3.1901.1"]
+```
 * `cabal-install` depends on `cabal-install-internal >= X.(Y*100+Z) && < X.(Y*100+Z+1)`
 
 The condition `cabal-install-internal` >= 3.2001 && < 3.2002 signifies "internal shipped with `cabal-install` 3.20.1.x"
@@ -546,11 +482,11 @@ No new release strategy is needed: `cabal-install-internal` joins the existing [
 > [!IMPORTANT]
 > This is the whole backport policy in one line: **a release-branch backport is valid iff it does not modify `Distribution.Client.API.*`.**
 
-#### Consumer delivery policy
+### Consumer delivery policy
 
 No consumer is forced to change, and no migration tooling is required at acceptance time. For every release that changes the public `API.*` tier, the checklist gains one item — "contact registered consumers".
 
-The registry is a living list, not an archive: consumers are tagged at every release that changes the public tier, and one that has not updated after **two consecutive such releases** is simply struck from the list. No deprecation cycle or compatibility shims are owed beyond that point — a struck consumer's practical escape hatch remains exact-bound pinning of `cabal-install-internal`.
+The registry is a living list: consumers are contacted at every release that changes the public tier. 
 
 ### Migration Strategy
 1. **Explicit separation**: Split into `cabal-install` (public API tier) and `cabal-install-internal`.
@@ -558,7 +494,7 @@ The registry is a living list, not an archive: consumers are tagged at every rel
 
 ## Interested parties
 Maintainers of all six reverse dependencies: Bodigrim (`cabal-add`, `hackage-revdeps`), kokobd (`cabal-hoogle`), mniip (`cabal-matrix`), tek (`hix`), HiromiIshii/deepflowinc (`guardian`) — plus Simon Marlow (`cabal-buck2`) and the Cabal maintenance team.
-`Have you contacted them?` Nope
+`Have you contacted them?` Once it’s approved, I’ll get in touch with them.
 
 ## Implementation Notes
 Yes, I will implement this myself in time for the next release.
