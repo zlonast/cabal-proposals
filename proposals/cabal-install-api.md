@@ -276,7 +276,7 @@ flowchart LR
     S3 --> OK["under the stability guarantee:<br>changes only in a major"]
 ```
 
-**Step 0 — build against the internal today.** `cabal-install-internal` is published on Hackage, so nothing prevents a new tool from depending on it *right now*: the only price is exact-bound pinning (`cabal-install-internal == 3.2001`) per the `ghc-internal` versioning scheme. The tool gets immediate access to the full implementation surface and accepts that breaking changes ship with every `cabal-install` release.
+**Step 0 — build against the internal today.** `cabal-install-internal` is published on Hackage, so nothing prevents a new tool from depending on it *right now*: the only price is exact-bound pinning (`cabal-install-internal == 3.2001.0`) per the `ghc-internal` versioning scheme. The tool gets immediate access to the full implementation surface and accepts that breaking changes ship with every `cabal-install` release.
 
 > [!WARNING]
 > Step 0 is a fast lane, not a resting place: every `cabal-install` release may break `cabal-install-internal` consumers. Plan to graduate to the public tier (Steps 1–3).
@@ -523,18 +523,22 @@ flowchart LR
 
 `cabal-install-internal` follows the `ghc-internal` versioning scheme discussed in this thread:
 
-**`cabal-install X.Y.Z.W` → `cabal-install-internal X.(Y*100+Z).W`**
+**`cabal-install X.Y.Z.W` → `cabal-install-internal X.(Y*100+Z).C`**
 
-* Every `cabal-install` release carries its own `cabal-install-internal` PVP major, so breaking internal changes are always PVP-legal — including those riding a bugfix backport (e.g. `cabal-install 3.20.1.0` ships `cabal-install-internal 3.2001.0`).
-* The mapping is monotonic and decodable in both directions (`A = X`, `Y = B div 100`, `Z = B mod 100`, `C = W`), with the same `Y, Z <= 99` assumption as `ghc-internal` (`9.14.1 -> 9.1401.0`).
+* Every `cabal-install` release series (`X.Y.Z`) carries its own `cabal-install-internal` PVP major (`X.(Y*100+Z)`), so breaking internal changes are always PVP-legal — including those riding a backport (e.g. `cabal-install 3.20.1.0` ships `cabal-install-internal 3.2001.0`). Breaking internal changes ride a `Z` bump of the tool; a `W` patch of the tool may only carry additive internal changes.
+* The mapping is monotonic and decodable for the release series (`A = X`, `Y = B div 100`, `Z = B mod 100`), with the same `Y, Z <= 99` assumption as `ghc-internal` (`9.14.1 -> 9.1401.0`).
+* The last component `C` is internal's own additive-patch counter, starting at `0` per tool release series. It is **not** a mirror of the tool's `W`: internal may release additive patches on its own (`3.1900.0 -> 3.1900.1`), and a later `W` patch of the tool with additive engine changes simply takes the next counter value. The exact tool patch release is identified by the changelog, not by `C`.
+* `cabal-install` depends on `cabal-install-internal >= X.(Y*100+Z) && < X.(Y*100+Z+1)`
 
 The condition `cabal-install-internal` >= 3.2001 && < 3.2002 signifies "internal shipped with `cabal-install` 3.20.1.x"
+
+Deliberate cross-series experiments are a one-line override in a project file — `allow-newer: cabal-install:cabal-install-internal` / `allow-older: ...` — and never leak to downstream users.
 
 ### Integration with the existing release process
 
 No new release strategy is needed: `cabal-install-internal` joins the existing [release checklist](https://github.com/haskell/cabal/wiki/Making-a-release) exactly the way `cabal-install-solver` did in Cabal 3.10. The additions to the checklist are mechanical:
 
-* **Version bumps (C.3):** add `cabal-install-internal/cabal-install-internal.cabal` to the list of `version` fields. The internal version is *derived*, not decided — `cabal-install X.Y.Z.W` maps to `cabal-install-internal X.(Y*100+Z).W` — so the release manager applies a one-line transformation instead of holding a versioning discussion.
+* **Version bumps (C.3):** add `cabal-install-internal/cabal-install-internal.cabal` to the list of `version` fields. The internal version is *derived*, not decided — `cabal-install X.Y.Z.W` maps to `cabal-install-internal X.(Y*100+Z).C` with `C` starting at `0` for the release series — so the release manager applies a one-line transformation instead of holding a versioning discussion.
 * **Changelogs (C.2):** a `changelog.d/` directory for `cabal-install-internal`. Unlike the solver, internal entries are *not* duplicated into the `cabal-install` changelog: duplication is reserved for changes to the public `API.*` tier, which are the contract and must be recorded in `cabal-install`'s changelog.
 * **Tags and Hackage uploads (C.4, C.5):** add the `cabal-install-internal-v…` tag and the package to the upload list, as with `cabal-install-solver`, and refresh the bootstrap plans.
 * **Backport check (section A):** the checklist rule "The API exposed by the libraries must not change in a breaking way for current consumers" becomes mechanically checkable for cabal-install: a backport is valid iff it does not modify `Distribution.Client.API.*` — enforceable in CI with a trivial path filter.
