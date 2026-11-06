@@ -226,6 +226,7 @@ Tier 1 serves the "programmatic cabal" audience. All three of its consumers are 
 1. **Existing modules remain unchanged** – for now, I propose a simple approach without an intermediate representation.
 2. **Full data-type separation** — the API tier defines its own data types, completely decoupled from the internal implementation; every operation is exposed as a wrapper function whose inputs and outputs are API types only.
 3. **Commands are residents, not consumers** — a facade never defines anything: it re-exports the engine's entry points, so the exported signature is exactly the frozen contract.
+4. **Tier 1 is the minimal common contract** — the interface the built-in commands already rely on, frozen as-is. Beyond it, each admission follows one rule: *we stabilize a chosen part of the existing engine interface and accept the corresponding constraints on its development.*
 
 ### API admission process
 
