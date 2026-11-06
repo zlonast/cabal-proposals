@@ -34,6 +34,7 @@ I would like to present my research on this topic to the Cabal developers and th
   - [Comparison](#comparison)
 - [Versioning and Backwards Compatibility](#versioning-and-backwards-compatibility)
   - [Release and Versioning Policy (PVP)](#release-and-versioning-policy-pvp)
+  - [Independent versioning is not a reduced obligation](#independent-versioning-is-not-a-reduced-obligation)
   - [Integration with the existing release process](#integration-with-the-existing-release-process)
   - [Consumer delivery policy](#consumer-delivery-policy)
   - [Migration Strategy](#migration-strategy)
@@ -52,7 +53,7 @@ Split the ~140 exported modules of `cabal-install` into a small, stability-guara
 Dependency chain: `cabal-install` → `cabal-install-internal`. The tier is enforced by a CI import-lint: every module of `cabal-install`'s library must live under `Distribution.Client.API.*`, and a facade must not define anything of its own.
 
 ## Motivation
-The cabal-install API is massive and barely used: out of ~140 modules, six reverse dependencies import only 32; meanwhile, PRs like #12289 cannot be backported to releases without breaking this usage. Half of this usage falls within the orchestration layer.
+The cabal-install API is massive and barely used: out of ~140 modules, the nine known consumers import only 50; meanwhile, PRs like #12289 cannot be backported to releases without breaking this usage. Half of this usage falls within the orchestration layer.
 
 ### Backports become a mechanical decision
 
@@ -81,11 +82,16 @@ The current situation is such that we don't know when we can release a backport;
 | hix | 0.9.1 | 2025-04-19 | ~17 mos | `>=3.16.0.0 && <3.17` (+solver) | build fails |
 | guardian | 0.5.0.0 | 2024-02-22 | ~31 mos | no bounds | build fails |
 
+Three further consumers were missed by the scan and found by review: `cabal-buck2` (on Hackage), `cabal-solver-plan`, and haskell.nix's `nix-tools` (its `make-install-plan` executable).
+
 ### Usage depth summary
 
-| Package | Seed (out of 32) | Usage pattern |
+| Package | Seed (out of 50) | Usage pattern |
 |---|---:|---|
+| cabal-buck2 | 24 | mixed mode: `NixStyleFlags` via `API.Flags`; from internal: `ProjectPlanning` (`ElaboratedConfiguredPackage`), `SetupWrapper`, `ProjectOrchestration`, `ScriptUtils`, `CmdBuild`, `InLibrary`, `InstallPlan`, `Types.*`, `Targets`, `JobControl`, `FetchUtils`, `Errors`, `Tar` |
 | hix | 19 | maximum: solver facade (`Dependency`, `SolverInstallPlan`, `Types.AllowNewer`), `Types.*`, `IndexUtils`, `Setup`, `CmdSdist`, `CmdUpdate`, `Upload`, `Types.Credentials`/`Repo` |
+| haskell.nix (`make-install-plan`) | 19 | maximum — the planning pipeline itself: `rebuildInstallPlan`, `ElaboratedConfiguredPackage`, `ProjectOrchestration`, `ProjectConfig`, `NixStyleOptions`, `DistDirLayout`, `Setup`, `Types.*`, `IndexUtils`, `Targets`, `HashValue`, `BuildReports.Types` |
+| cabal-solver-plan | 14 | solver-driven: `modularResolver` via `cabal-install-solver` (`Solver.Modular.*`), `Dependency`, `GlobalFlags` (`RepoContext`), `IndexUtils` (+ `IndexState`, `Timestamp`), `Types.*`, `Targets`, `Setup`, `Utils`, `HashValue`, `ProjectPlanning.SetupPolicy`, `ProjectPlanning.Types` |
 | cabal-hoogle | 12 | orchestration layer: `ProjectOrchestration`, `ProjectPlanning(.Types)`, `ScriptUtils`, `CmdBuild`, `CmdErrorMessages`, `TargetProblem`, `NixStyleOptions`, `InstallPlan`, `Setup` |
 | guardian | 6 | same orchestration layer: `establishProjectBaseContextWithRoot`, `withInstallPlan`, `CmdUpdate.updateAction` |
 | cabal-matrix | 5 | lightweight: `Config`, `GlobalFlags`, `IndexUtils`, `Sandbox.loadConfigOrSandboxConfig`, `Types.SourcePackageDb` |
@@ -100,37 +106,55 @@ The current situation is such that we don't know when we can release a backport;
 | Module (`Distribution.Client.`) | total | uniq | Who uses |
 |---|---:|---:|---|
 | `Config` | 52 | 0 | cabal-matrix, hackage-revdeps, hix |
-| `GlobalFlags` | 29 | 0 | cabal-matrix, hackage-revdeps, hix |
-| `NixStyleOptions` | 49 | 0 | cabal-hoogle, guardian, hix |
+| `GlobalFlags` | 29 | 0 | cabal-matrix, hackage-revdeps, hix, cabal-solver-plan, haskell.nix, cabal-buck2 |
+| `NixStyleOptions` | 49 | 0 | cabal-hoogle, guardian, hix, haskell.nix, cabal-buck2 |
 | `Types.SourcePackageDb` | 8 | 0 | cabal-hoogle, cabal-matrix, hix |
 | `CmdUpdate` | 93 | 1 | guardian, hix |
-| `DistDirLayout` | 53 | 0 | cabal-add, cabal-hoogle |
-| `IndexUtils` | 69 | 0 | cabal-matrix, hix |
-| `InstallPlan` | 26 | 0 | cabal-hoogle, guardian |
-| `ProjectConfig` | 68 | 0 | cabal-add, guardian |
-| `ProjectOrchestration` | 92 | 0 | cabal-hoogle, guardian |
-| `ProjectPlanning` | 86 | 0 | cabal-hoogle, guardian |
-| `Setup` | 41 | 0 | cabal-hoogle, hix |
-| `CmdBuild` | 95 | 1 | cabal-hoogle |
-| `CmdErrorMessages` | 88 | 0 | cabal-hoogle |
+| `DistDirLayout` | 53 | 0 | cabal-add, cabal-hoogle, haskell.nix, cabal-buck2 |
+| `IndexUtils` | 69 | 0 | cabal-matrix, hix, cabal-solver-plan, haskell.nix |
+| `InstallPlan` | 26 | 0 | cabal-hoogle, guardian, haskell.nix, cabal-buck2 |
+| `ProjectConfig` | 68 | 0 | cabal-add, guardian, haskell.nix, cabal-buck2 |
+| `ProjectOrchestration` | 92 | 0 | cabal-hoogle, guardian, haskell.nix, cabal-buck2 |
+| `ProjectPlanning` | 86 | 0 | cabal-hoogle, guardian, haskell.nix, cabal-buck2 |
+| `Setup` | 41 | 0 | cabal-hoogle, hix, cabal-solver-plan, haskell.nix, cabal-buck2 |
+| `CmdBuild` | 95 | 1 | cabal-hoogle, cabal-buck2 |
+| `CmdErrorMessages` | 88 | 0 | cabal-hoogle, cabal-buck2 |
 | `CmdSdist` | 94 | 1 | hix |
-| `Compat.Prelude` | 2 | 0 | hix |
-| `Dependency` | 25 | 0 | hix |
+| `Compat.Prelude` | 2 | 0 | hix, haskell.nix, cabal-buck2 |
+| `Dependency` | 25 | 0 | hix, cabal-solver-plan |
 | `Dependency.Types` | 3 | 0 | hix |
 | `HttpUtils` | 25 | 0 | cabal-add |
-| `IndexUtils.Timestamp` | 3 | 0 | hix |
+| `IndexUtils.Timestamp` | 3 | 0 | hix, cabal-solver-plan |
 | `ProjectFlags` | 44 | 0 | hix |
-| `ProjectPlanning.Types` | 60 | 0 | cabal-hoogle |
+| `ProjectPlanning.Types` | 60 | 0 | cabal-hoogle, cabal-solver-plan, haskell.nix, cabal-buck2 |
 | `RebuildMonad` | 16 | 0 | cabal-add |
 | `Sandbox` | 78 | 2 | cabal-matrix |
-| `ScriptUtils` | 93 | 0 | cabal-hoogle |
+| `ScriptUtils` | 93 | 0 | cabal-hoogle, cabal-buck2 |
 | `SolverInstallPlan` | 17 | 0 | hix |
 | `TargetProblem` | 87 | 0 | cabal-hoogle |
-| `Types` | 16 | 0 | hix |
+| `Types` | 16 | 0 | hix, cabal-solver-plan, cabal-buck2 |
 | `Types.AllowNewer` | 3 | 0 | hix |
 | `Types.Credentials` | 1 | 0 | hix |
-| `Types.Repo` | 5 | 0 | hix |
+| `Types.Repo` | 5 | 0 | hix, cabal-solver-plan, haskell.nix |
 | `Upload` | 56 | 2 | hix |
+| `Targets` | 34 | 0 | cabal-solver-plan, haskell.nix, cabal-buck2 |
+| `Types.PackageSpecifier` | 3 | 0 | cabal-solver-plan |
+| `Types.PackageLocation` | 7 | 0 | haskell.nix, cabal-buck2 |
+| `Types.SourceRepo` | 3 | 0 | haskell.nix |
+| `Types.ConfiguredId` | 3 | 0 | haskell.nix |
+| `Types.ReadyPackage` | 10 | 0 | haskell.nix, cabal-buck2 |
+| `IndexUtils.IndexState` | 5 | 0 | cabal-solver-plan |
+| `Utils` | 11 | 0 | cabal-solver-plan, cabal-buck2 |
+| `HashValue` | 3 | 0 | cabal-solver-plan, haskell.nix |
+| `ProjectPlanning.SetupPolicy` | 61 | 0 | cabal-solver-plan |
+| `BuildReports.Types` | 3 | 0 | haskell.nix |
+| `Version` | 1 | 0 | haskell.nix |
+| `SetupWrapper` | 76 | 0 | cabal-buck2 |
+| `Tar` | 5 | 0 | cabal-buck2 |
+| `Errors` | 10 | 0 | cabal-buck2 |
+| `FetchUtils` | 30 | 0 | cabal-buck2 |
+| `JobControl` | 13 | 0 | cabal-buck2 |
+| `InLibrary` | 64 | 0 | cabal-buck2 |
 
 ### Stable API core: 19 modules
 
@@ -155,6 +179,7 @@ flowchart BT
     TOOLS["external tools<br>(4 reverse dependencies)"] --> T0
     EMBED["programmatic cabal<br>(hix-class embedders)"] --> T1
     EXE["exe:cabal"] --> T1
+    PLAN["plan extractors:<br>cabal-solver-plan,<br>haskell.nix make-install-plan"] --> ENG
     T0 --> ENG
     T1 --> ENG
 ```
@@ -187,6 +212,11 @@ New Module       API.Flags   API.Command.CmdSdist  API.Command.CmdUpdate
 hix                  ●                ●                     ●
 cabal-buck2          ●
 guardian             ●                                      ●
+
+the engine:
+Consumer                           cabal-install-internal   cabal-install-solver
+cabal-solver-plan                          ●                        ●
+haskell.nix (make-install-plan)            ●                        ●
 ```
 
 Tier 1 serves the "programmatic cabal" audience. All three of its consumers are ported in **mixed mode**: hix takes the sdist/update facades plus the flag dictionary. `cabal-buck2` — takes `NixStyleFlags` the same way. And `guardian`, takes `updateAction` via `API.Command.CmdUpdate` plus `API.Flags`, with its orchestration/plan surface exact-pinned to `cabal-install-internal`.
@@ -269,7 +299,7 @@ flowchart LR
 
 ## Migrating reverse dependencies to the new API
 
-All six reverse dependencies are ported; the migrated sources are vendored in the companion repository [zlonast/cabal-api-examples](https://github.com/zlonast/cabal-api-examples) (upcoming), together with minimal per-use-case examples.
+All six reverse dependencies are ported; the migrated sources are vendored in the companion repository [zlonast/cabal-api-examples](https://github.com/zlonast/cabal-api-examples) (upcoming), together with minimal per-use-case examples. The other three surveyed consumers — `cabal-buck2` and the two plan producers — are vendored there as well, building against `cabal-install-internal` with exact pins.
 
 ### Replacing internal imports with the API
 
@@ -425,7 +455,7 @@ Keep the layout, but surgically extract the definitions reverse dependencies imp
 | 2. Freeze backports | no | yes | ~140 modules | — |
 | 3. Publish 19 modules as-is | yes | nominal — closures leak | ~97 modules | no |
 | 4. Extract used definitions | yes | yes, but ad hoc | small | no |
-| **Proposal** | **yes** | **yes — PVP-level** | **24 modules, 670 lines** | **yes — all 6 rdeps migrated** |
+| **Proposal** | **yes** | **yes** | **24 modules, 670 lines** | **yes** |
 
 ## Versioning and Backwards Compatibility
 
@@ -445,13 +475,15 @@ flowchart LR
     Q2 -->|no| MIN["minor: C<br>new names, new fields"]
 ```
 
-`cabal-install-internal` follows the `ghc-internal` versioning scheme discussed in this thread:
+`cabal-install-internal` follows a `ghc-internal`-style versioning scheme, proposed for this split by @adamgundry ([comment](https://github.com/haskell/cabal-proposals/pull/8#issuecomment-5726473287)): `ghc-internal` encodes the full GHC version in its own (`9.14.1` → `ghc-internal-9.1401.0`), so every GHC release series carries its own PVP major.
 
 **`cabal-install X.Y.Z.W` → `cabal-install-internal X.(Y*100+Z).C`**
 
-* Every `cabal-install` release series (`X.Y.Z`) carries its own `cabal-install-internal` PVP major (`X.(Y*100+Z)`), so breaking internal changes are always PVP-legal — including those riding a backport (e.g. `cabal-install 3.20.1.0` ships `cabal-install-internal 3.2001.0`). Breaking internal changes ride a `Z` bump of the tool; a `W` patch of the tool may only carry additive internal changes.
+* Every `cabal-install` release series (`X.Y.Z`) carries its own `cabal-install-internal` PVP major (`X.(Y*100+Z)`), so breaking internal changes always come with a PVP-major bump of `cabal-install-internal` — including those riding a backport (e.g. `cabal-install 3.20.1.0` ships `cabal-install-internal 3.2001.0`). Breaking internal changes ride a `Z` bump of the tool; a `W` patch of the tool may only carry additive internal changes.
 * The mapping is monotonic and decodable for the release series (`A = X`, `Y = B div 100`, `Z = B mod 100`), with the same `Y, Z <= 99` assumption as `ghc-internal` (`9.14.1 -> 9.1401.0`).
 * The last component `C` is internal's own additive-patch counter, starting at `0` per tool release series. It is **not** a mirror of the tool's `W`: internal may release additive patches on its own (`3.1900.0 -> 3.1900.1`), and a later `W` patch of the tool with additive engine changes simply takes the next counter value. The exact tool patch release is identified by the changelog, not by `C`.
+
+This is the one departure from `ghc-internal` itself, which only ever ships with GHC: here `C` is a free additive counter, so `cabal-install-internal` may release on its own (`3.1900.0 → 3.1900.1`) and absorb additive engine changes riding a tool `W` patch (`3.1901.0 → 3.1901.1`).
 
 A walk through one release series (`3.19`):
 
@@ -470,6 +502,21 @@ The condition `cabal-install-internal` >= 3.2001 && < 3.2002 signifies "internal
 
 Deliberate cross-series experiments are a one-line override in a project file — `allow-newer: cabal-install:cabal-install-internal` / `allow-older: ...` — and never leak to downstream users.
 
+`cabal-install-solver` is out of scope for this scheme: it keeps its existing versioning and exposure — including the `Distribution.Solver.Modular.*` namespace — unchanged by this proposal, with its usual PVP obligations.
+
+### Independent versioning is not a reduced obligation
+
+The `ghc-internal` scheme answers *which number identifies a release*; it does not by itself answer *what consumers may rely on*. The two questions are easy to conflate, so explicitly:
+
+- **Independent versioning is a mechanism, not a promise.** Deriving `cabal-install-internal X.(Y*100+Z).C` from the tool release makes breaking engine changes *PVP-legal* without inflating the tool's own major version, and makes bounds decodable back to the tool series — nothing more.
+- **Reduced compatibility obligations are the explicit contract, and they shift cost rather than remove it.** On the public tier the team carries the PVP obligations and delivers migration PRs. On the engine the team promises no cross-release stability at all.
+
+| | public tier (`cabal-install`) | engine (`cabal-install-internal`) |
+|---|---|---|
+| what breaks it | only an `A.B` bump of the tool | any tool release; `W` patches are additive-only |
+| team's obligation | full PVP + migration PRs to registered consumers | a changelog entry per release |
+| consumer's obligation | ordinary PVP bounds | exact pin `== X.(Y*100+Z).C`, migrate on each tool release |
+
 ### Integration with the existing release process
 
 No new release strategy is needed: `cabal-install-internal` joins the existing [release checklist](https://github.com/haskell/cabal/wiki/Making-a-release) exactly the way `cabal-install-solver` did in Cabal 3.10. The additions to the checklist are mechanical:
@@ -477,10 +524,10 @@ No new release strategy is needed: `cabal-install-internal` joins the existing [
 * **Version bumps (C.3):** add `cabal-install-internal/cabal-install-internal.cabal` to the list of `version` fields. The internal version is *derived*, not decided — `cabal-install X.Y.Z.W` maps to `cabal-install-internal X.(Y*100+Z).C` with `C` starting at `0` for the release series — so the release manager applies a one-line transformation instead of holding a versioning discussion.
 * **Changelogs (C.2):** a `changelog.d/` directory for `cabal-install-internal`. Unlike the solver, internal entries are *not* duplicated into the `cabal-install` changelog: duplication is reserved for changes to the public `API.*` tier, which are the contract and must be recorded in `cabal-install`'s changelog.
 * **Tags and Hackage uploads (C.4, C.5):** add the `cabal-install-internal-v…` tag and the package to the upload list, as with `cabal-install-solver`, and refresh the bootstrap plans.
-* **Backport check (section A):** the checklist rule "The API exposed by the libraries must not change in a breaking way for current consumers" becomes mechanically checkable for cabal-install: a backport is valid iff it does not modify `Distribution.Client.API.*` — enforceable in CI with a trivial path filter.
+* **Backport check (section A):** the checklist rule "The API exposed by the libraries must not change in a breaking way for current consumers" becomes mechanically checkable for cabal-install: a backport that modifies `Distribution.Client.API.*` cannot ride a patch release — enforceable in CI with a trivial path filter. The same PVP rule covers every other exposed module downstream can reach through the tier — re-exported types and `cabal-install-solver` included.
 
 > [!IMPORTANT]
-> This is the whole backport policy in one line: **a release-branch backport is valid iff it does not modify `Distribution.Client.API.*`.**
+> The backport policy in one line: **a backport that modifies `Distribution.Client.API.*` cannot ride a patch release** — and the same PVP rule covers the rest of the exposed surface downstream can reach through the tier, re-exported types and `cabal-install-solver` included.
 
 ### Consumer delivery policy
 
@@ -493,7 +540,7 @@ The registry is a living list: consumers are contacted at every release that cha
 2. **Reverse dependencies migration**: the migration patches exist and are vendored in the companion repository ([zlonast/cabal-api-examples](https://github.com/zlonast/cabal-api-examples), upcoming); pull requests with them will be submitted to the maintainers of the reverse dependencies.
 
 ## Interested parties
-Maintainers of all six reverse dependencies: Bodigrim (`cabal-add`, `hackage-revdeps`), kokobd (`cabal-hoogle`), mniip (`cabal-matrix`), tek (`hix`), HiromiIshii/deepflowinc (`guardian`) — plus Simon Marlow (`cabal-buck2`) and the Cabal maintenance team.
+Maintainers of all six reverse dependencies: Bodigrim (`cabal-add`, `hackage-revdeps`), kokobd (`cabal-hoogle`), mniip (`cabal-matrix`), tek (`hix`), HiromiIshii/deepflowinc (`guardian`) — plus Simon Marlow (`cabal-buck2`), Andrea Bedini (`cabal-solver-plan`, haskell.nix's `make-install-plan`), and the Cabal maintenance team.
 `Have you contacted them?` Once it’s approved, I’ll get in touch with them.
 
 ## Implementation Notes
@@ -508,6 +555,7 @@ Yes, I will implement this myself in time for the next release.
 ## References
 * Discussion "[Usefulness of releasing `cabal-install` the library](https://github.com/haskell/cabal/issues/12326)" — the origin of this proposal.
 * [haskell/cabal#12289](https://github.com/haskell/cabal/pull/12289) — a PR that could not be backported because it breaks the `cabal-install` API.
-* [zlonast/cabal-api-examples](https://github.com/zlonast/cabal-api-examples) — companion repository: the migrated reverse dependencies (hackage-revdeps, cabal-matrix, cabal-add, cabal-hoogle, hix, cabal-buck2) and minimal per-use-case examples, building against the API branch.
+* [zlonast/cabal-api-examples](https://github.com/zlonast/cabal-api-examples) — companion repository: the migrated consumers — the six reverse dependencies, `cabal-buck2`, and the two plan producers (`cabal-solver-plan`, haskell.nix's `make-install-plan`, both exact-pinned to `cabal-install-internal`) — plus minimal per-use-case examples, building against the API branch.
+* [andreabedini/cabal-solver-plan](https://github.com/andreabedini/cabal-solver-plan) and haskell.nix's [make-install-plan](https://github.com/ican-group/haskell.nix/tree/master/nix-tools/nix-tools/make-install-plan).
 * The `cabal-install-solver` split (Cabal 3.10) — the precedent for splitting an internal package out of `cabal-install`.
 * [`ghc-internal`](https://hackage.haskell.org/package/ghc-internal) — the versioning scheme (`9.14.1 -> 9.1401.0`) adopted here for `cabal-install-internal`.
