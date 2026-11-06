@@ -53,7 +53,7 @@ Split the ~140 exported modules of `cabal-install` into a small, stability-guara
 Dependency chain: `cabal-install` → `cabal-install-internal`. The tier is enforced by a CI import-lint: every module of `cabal-install`'s library must live under `Distribution.Client.API.*`, and a facade must not define anything of its own.
 
 ## Motivation
-The cabal-install API is massive and barely used: out of ~140 modules, the nine known consumers import only 50; meanwhile, PRs like #12289 cannot be backported to releases without breaking this usage. Half of this usage falls within the orchestration layer.
+The cabal-install API is massive and barely used: out of ~140 modules, the nine known consumers import only 51; meanwhile, PRs like #12289 cannot be backported to releases without breaking this usage. Half of this usage falls within the orchestration layer.
 
 ### Backports become a mechanical decision
 
@@ -81,17 +81,20 @@ The current situation is such that we don't know when we can release a backport;
 | cabal-hoogle | 3.16.0.0 | 2026-01-10 | ~8 mos | `>=3.10 && <3.17` | OK |
 | hix | 0.9.1 | 2025-04-19 | ~17 mos | `>=3.16.0.0 && <3.17` (+solver) | build fails |
 | guardian | 0.5.0.0 | 2024-02-22 | ~31 mos | no bounds | build fails |
+| cabal-buck2 | 0.5.0.0 | 2026-11-04 | ~1 day | `==3.18.1.0` (+solver) | — |
+| make-install-plan (haskell.nix `nix-tools`) | not released on Hackage | — | — | `^>=3.16` (+solver) | n/a |
+| cabal-solver-plan | 0.1.0.0 (GitHub release) | 2026-10-15 | ~3 wks | `^>=3.18.1.0` (+solver) | not on Hackage |
 
-Three further consumers were missed by the scan and found by review: `cabal-buck2` (on Hackage), `cabal-solver-plan`, and haskell.nix's `nix-tools` (its `make-install-plan` executable).
+`make-install-plan` and `cabal-solver-plan` are not Hackage reverse dependencies, and the `nix-tools` on Hackage is a 2019 upload, not what haskell.nix builds — all three were found by review.
 
 ### Usage depth summary
 
-| Package | Seed (out of 50) | Usage pattern |
+| Package | Seed (out of 51) | Usage pattern |
 |---|---:|---|
-| cabal-buck2 | 24 | mixed mode: `NixStyleFlags` via `API.Flags`; from internal: `ProjectPlanning` (`ElaboratedConfiguredPackage`), `SetupWrapper`, `ProjectOrchestration`, `ScriptUtils`, `CmdBuild`, `InLibrary`, `InstallPlan`, `Types.*`, `Targets`, `JobControl`, `FetchUtils`, `Errors`, `Tar` |
-| hix | 19 | maximum: solver facade (`Dependency`, `SolverInstallPlan`, `Types.AllowNewer`), `Types.*`, `IndexUtils`, `Setup`, `CmdSdist`, `CmdUpdate`, `Upload`, `Types.Credentials`/`Repo` |
-| haskell.nix (`make-install-plan`) | 19 | maximum — the planning pipeline itself: `rebuildInstallPlan`, `ElaboratedConfiguredPackage`, `ProjectOrchestration`, `ProjectConfig`, `NixStyleOptions`, `DistDirLayout`, `Setup`, `Types.*`, `IndexUtils`, `Targets`, `HashValue`, `BuildReports.Types` |
-| cabal-solver-plan | 14 | solver-driven: `modularResolver` via `cabal-install-solver` (`Solver.Modular.*`), `Dependency`, `GlobalFlags` (`RepoContext`), `IndexUtils` (+ `IndexState`, `Timestamp`), `Types.*`, `Targets`, `Setup`, `Utils`, `HashValue`, `ProjectPlanning.SetupPolicy`, `ProjectPlanning.Types` |
+| cabal-buck2 | 24 | largest: `ProjectOrchestration`, `ProjectPlanning`, `ScriptUtils`, `SetupWrapper`, `InLibrary`, `FetchUtils`; generates Buck2 build files from `ElaboratedConfiguredPackage` |
+| make-install-plan | 21 | `rebuildInstallPlan`, `ElaboratedConfiguredPackage`, `ProjectOrchestration`, `NixStyleOptions`; vendors `ProjectPlanOutput` and the `CmdFreeze` internals |
+| hix | 19 | solver facade (`Dependency`, `SolverInstallPlan`, `Types.AllowNewer`), `Types.*`, `IndexUtils`, `Setup`, `CmdSdist`, `CmdUpdate`, `Upload`, `Types.Credentials`/`Repo` |
+| cabal-solver-plan | 14 | index, repository and target types around the solver, plus 31 direct `Distribution.Solver.*` imports |
 | cabal-hoogle | 12 | orchestration layer: `ProjectOrchestration`, `ProjectPlanning(.Types)`, `ScriptUtils`, `CmdBuild`, `CmdErrorMessages`, `TargetProblem`, `NixStyleOptions`, `InstallPlan`, `Setup` |
 | guardian | 6 | same orchestration layer: `establishProjectBaseContextWithRoot`, `withInstallPlan`, `CmdUpdate.updateAction` |
 | cabal-matrix | 5 | lightweight: `Config`, `GlobalFlags`, `IndexUtils`, `Sandbox.loadConfigOrSandboxConfig`, `Types.SourcePackageDb` |
@@ -149,6 +152,7 @@ Three further consumers were missed by the scan and found by review: `cabal-buck
 | `ProjectPlanning.SetupPolicy` | 61 | 0 | cabal-solver-plan |
 | `BuildReports.Types` | 3 | 0 | haskell.nix |
 | `Version` | 1 | 0 | haskell.nix |
+| `Utils.Json` | 3 | 0 | haskell.nix |
 | `SetupWrapper` | 76 | 0 | cabal-buck2 |
 | `Tar` | 5 | 0 | cabal-buck2 |
 | `Errors` | 10 | 0 | cabal-buck2 |
@@ -221,6 +225,8 @@ haskell.nix (make-install-plan)            ●                        ●
 
 Tier 1 serves the "programmatic cabal" audience. All three of its consumers are ported in **mixed mode**: hix takes the sdist/update facades plus the flag dictionary. `cabal-buck2` — takes `NixStyleFlags` the same way. And `guardian`, takes `updateAction` via `API.Command.CmdUpdate` plus `API.Flags`, with its orchestration/plan surface exact-pinned to `cabal-install-internal`.
 
+Plan producers (`cabal-buck2`, `make-install-plan`, `cabal-solver-plan`) hand the elaborated plan or the solver's result to another build system, which the tier deliberately doesn't cover, so they stay on `cabal-install-internal` for now. The only exception is `cabal-buck2`, which takes `NixStyleFlags` from `API.Flags`. `cabal-solver-plan` also depends on most of `cabal-install-solver`.
+
 ### Design Principles
 
 1. **Existing modules remain unchanged** – for now, I propose a simple approach without an intermediate representation.
@@ -243,7 +249,7 @@ flowchart LR
 **Step 0 — build against the internal today.** `cabal-install-internal` is published on Hackage, so nothing prevents a new tool from depending on it *right now*: the only price is exact-bound pinning (`cabal-install-internal == 3.2001.0`) per the `ghc-internal` versioning scheme. The tool gets immediate access to the full implementation surface and accepts that breaking changes ship with every `cabal-install` release.
 
 > [!WARNING]
-> Step 0 is a fast lane, not a resting place: every `cabal-install` release may break `cabal-install-internal` consumers. Plan to graduate to the public tier (Steps 1–3).
+> Step 0 is a fast lane, not a resting place: every `cabal-install` release may break `cabal-install-internal` consumers. Plan to graduate to the public tier (Steps 1–3). Plan producers are currently the exception: the public tier has nothing for them to graduate to. Whether it should is Open Question 1.
 
 **Step 1 — request admission.** Once the tool works and its needs have stabilized, its author opens an issue in `haskell/cabal` using a dedicated issue template (added by this proposal as `.github/ISSUE_TEMPLATE/api_admission.md`, in the same format as the existing templates):
 
